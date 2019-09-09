@@ -5,6 +5,11 @@ from copy import deepcopy
 import torch.nn as nn
 from torch import distributions as dis
 
+EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
+# CAP the standard deviation of the actor
+LOG_STD_MAX = 2
+LOG_STD_MIN = -20
+REG = 1e-3  # regularization of the actor
 
 class SLAC(nn.Module):
     def __init__(self,
@@ -63,12 +68,11 @@ class SLAC(nn.Module):
                                      nn.ReLU(),
                                      nn.Linear(self.hidden_size, self.action_size, bias=True))
 
-        self.f_s2vara = nn.Sequential(nn.Linear(input_size * seq_len, self.hidden_size, bias=True),
+        self.f_s2log_siga = nn.Sequential(nn.Linear(input_size * seq_len, self.hidden_size, bias=True),
                                       nn.ReLU(),
                                       nn.Linear(self.hidden_size, self.hidden_size, bias=True),
                                       nn.ReLU(),
-                                      nn.Linear(self.hidden_size, self.action_size, bias=True),
-                                      nn.Softplus())
+                                      nn.Linear(self.hidden_size, self.action_size, bias=True))
 
         # V network
         self.f_d2v = nn.Sequential(nn.Linear(self.d_layer, self.hidden_size, bias=True),
@@ -207,7 +211,7 @@ class SLAC(nn.Module):
                                               nn.Softplus())
 
         self.optimizer_st = torch.optim.Adam(self.parameters(), lr=lr_st)
-        self.optimizer_a = torch.optim.Adam([*self.f_s2mua.parameters(), *self.f_s2vara.parameters()], lr=lr_rl)
+        self.optimizer_a = torch.optim.Adam([*self.f_s2mua.parameters(), *self.f_s2log_siga.parameters()], lr=lr_rl)
         self.optimizer_v = torch.optim.Adam(
             [*self.f_da2q1.parameters(), *self.f_da2q2.parameters(), *self.f_d2v.parameters()], lr=lr_rl)
         self.optimizer_e = torch.optim.Adam([self.log_beta_h], lr=lr_rl)  # optimizer for beta_h
@@ -584,6 +588,7 @@ class SLAC(nn.Module):
 
         # S_sampled = S_sampled.transpose(0, 1).data  # new shape: num_steps x batch_size x n_neurons
         # XS_sampled = XS_sampled.transpose(0, 1).data
+        # SP_sampled = SP_sampled.transpose(0, 1).data
         # A_sampled = A_sampled.transpose(0, 1).data
         # R_sampled = R_sampled.transpose(0, 1).data
         # V_sampled = V_sampled.transpose(0, 1).data
@@ -591,10 +596,10 @@ class SLAC(nn.Module):
 
         # print(S_sampled.size())
 
-        mua_tensor = self.f_s2mua(XS_sampled).clamp(-1e4, 1e4)
-        siga_tensor = torch.sqrt(self.f_s2vara(XS_sampled)).clamp(1e-4, 1e4)
+        mua_tensor = self.f_s2mua(XS_sampled)
+        siga_tensor = torch.exp(self.f_s2log_siga(XS_sampled).clamp(LOG_STD_MIN, LOG_STD_MAX))
         v_tensor = self.f_d2v(S_sampled)
-        vp_tensor = self.f_d2v_tar(SP_sampled)
+        vp_tensor = self.f_d2v_tar(SP_sampled).data
         q_tensor_1 = self.f_da2q1(torch.cat((S_sampled, A_sampled), dim=-1))
         q_tensor_2 = self.f_da2q2(torch.cat((S_sampled, A_sampled), dim=-1))
 
@@ -610,9 +615,9 @@ class SLAC(nn.Module):
             q_exp = sampled_q
             log_pi_exp = torch.sum(- (mua_tensor.data - sampled_u.data).pow(2)
                                    / (siga_tensor.data.pow(2)) / 2
-                                   - torch.log(siga_tensor.data * torch.tensor(2.5066)).clamp(-20, 10),
+                                   - torch.log(siga_tensor.data * torch.tensor(2.5066)),
                                    dim=-1, keepdim=True)
-            log_pi_exp -= torch.sum(torch.log(1.0 - sampled_a.pow(2) + 1e-6), dim=-1, keepdim=True)
+            log_pi_exp -= torch.sum(torch.log(1.0 - sampled_a.pow(2) + EPS), dim=-1, keepdim=True)
 
             v_tar = (q_exp - beta_h * log_pi_exp.data).detach().data
 
@@ -634,14 +639,14 @@ class SLAC(nn.Module):
                               self.f_da2q2(torch.cat((S_sampled, torch.tanh(sampled_u)), dim=-1)))
             Q_tmp.backward(torch.ones_like(Q_tmp))
 
-            PQPU = sampled_u.grad.data.clamp(-1e4, 1e4)  # \frac{\partial Q}{\partial a}
+            PQPU = sampled_u.grad.data  # \frac{\partial Q}{\partial a}
 
             eps = (sampled_u.data - mua_tensor.data) / (siga_tensor.data)  # action noise quantity
             a = sampled_a.data  # action quantity
 
-            grad_mua = (beta_h * (2 * a) - PQPU).data * V_sampled.repeat_interleave(a.size()[-1], dim=-1)
-            grad_siga = (- (beta_h / siga_tensor.data).clamp(-1e4, 1e4) + 2 * beta_h * a * eps - PQPU * eps).data \
-                        * V_sampled.repeat_interleave(a.size()[-1], dim=-1)
+            grad_mua = (beta_h * (2 * a) - PQPU).data * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * mua_tensor
+            grad_siga = (- beta_h / (siga_tensor.data + EPS) + 2 * beta_h * a * eps - PQPU * eps).data \
+                        * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * siga_tensor
 
             self.optimizer_v.zero_grad()
             loss_critic.backward()
@@ -651,8 +656,8 @@ class SLAC(nn.Module):
             self.optimizer_v.step()
 
             self.optimizer_a.zero_grad()
-            mua_tensor.backward(grad_mua)
-            siga_tensor.backward(grad_siga)
+            mua_tensor.backward(grad_mua / torch.ones_like(mua_tensor, dtype=torch.float32).sum())
+            siga_tensor.backward(grad_siga / torch.ones_like(siga_tensor, dtype=torch.float32).sum())
             if grad_clip:
                 nn.utils.clip_grad_value_([*self.f_d2vara.parameters(), *self.f_d2mua.parameters()], 1.0)
             self.optimizer_a.step()
@@ -668,8 +673,8 @@ class SLAC(nn.Module):
             sampled_u = mu_prob.sample()
             sampled_a = torch.tanh(sampled_u)
 
-            log_pi_exp = torch.sum(mu_prob.log_prob(sampled_u).clamp(-20, 10), dim=-1, keepdim=True) - torch.sum(
-                torch.log(1 - sampled_a.pow(2) + 1e-6), dim=-1, keepdim=True)
+            log_pi_exp = torch.sum(mu_prob.log_prob(sampled_u), dim=-1, keepdim=True) - torch.sum(
+                torch.log(1 - sampled_a.pow(2) + EPS), dim=-1, keepdim=True)
 
             sampled_q = torch.min(self.f_da2q1(torch.cat((S_sampled, sampled_a), dim=-1)).data,
                                   self.f_da2q2(torch.cat((S_sampled, sampled_a), dim=-1)).data)
@@ -692,13 +697,13 @@ class SLAC(nn.Module):
             sampled_u = mu_prob.rsample()
             sampled_a = torch.tanh(sampled_u)
 
-            log_pi_exp = torch.sum(mu_prob.log_prob(sampled_u).clamp(-20, 10), dim=-1, keepdim=True) - torch.sum(
-                torch.log(1 - sampled_a.pow(2) + 1e-6), dim=-1, keepdim=True)
+            log_pi_exp = torch.sum(mu_prob.log_prob(sampled_u), dim=-1, keepdim=True) - torch.sum(
+                torch.log(1 - sampled_a.pow(2) + EPS), dim=-1, keepdim=True)
 
-            loss_a = torch.mean(
-                beta_h * log_pi_exp * V_sampled - torch.min(self.f_da2q1(torch.cat((S_sampled, sampled_a), dim=-1)),
-                                                            self.f_da2q2(
-                                                                torch.cat((S_sampled, sampled_a), dim=-1))) * V_sampled)
+            loss_a = torch.mean(beta_h * log_pi_exp * V_sampled
+                                - torch.min(self.f_da2q1(torch.cat((S_sampled, sampled_a), dim=-1)),
+                                            self.f_da2q2(torch.cat((S_sampled, sampled_a), dim=-1))) * V_sampled) \
+                     + REG * 0.5 * (torch.mean(siga_tensor.pow(2)) + torch.mean(mua_tensor.pow(2)))
 
             self.optimizer_v.zero_grad()
             loss_critic.backward()
@@ -742,8 +747,8 @@ class SLAC(nn.Module):
         if isinstance(SS, np.ndarray):
             SS = torch.from_numpy(SS.astype(np.float32)).view(1, self.seq_len * self.input_size).to(device=self.device)
 
-        mua = self.f_s2mua(SS).clamp(-1e4, 1e4)
-        siga = torch.sqrt(self.f_s2vara(SS)).clamp(1e-4, 1e4)
+        mua = self.f_s2mua(SS)
+        siga = torch.exp(self.f_s2log_siga(SS).clamp(LOG_STD_MIN, LOG_STD_MAX))
 
         # if np.random.rand() < 0.005:
         #     print("mua = ", end="")
