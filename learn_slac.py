@@ -76,11 +76,11 @@ else:
 
 
 # ================ Hyper-parameters =============
-beta_h = 'auto_1.0'
+beta_h = 'auto_1.0'  # entropy coefficient of SAC ('\alpha' in the SAC paper)
 batch_size = 32
 seq_len = 8
 gamma = 0.99
-sigx = 0.3333  # sigma of output prediction, alternative: sigx = 'auto'
+sigx = 'auto'  # sigma of output prediction, sigx = 0.33333 in the original implementation (for pixel observations)
 
 step_start_rl = 1000  # step to start reinforcement learning (SAC)
 step_start_st = 1000  # step to start learning the state transition model
@@ -112,11 +112,13 @@ max_episodes = int(max_all_steps / est_min_steps) + 1  # for replay buffer
 agent = SLAC(input_size=env.observation_space.shape[0] + 1,
              action_size=env.action_space.shape[0],
              seq_len=seq_len,
+             beta_h=beta_h,
              sigx=sigx)
 
 agent_test = SLAC(input_size=env.observation_space.shape[0] + 1,
                   action_size=env.action_space.shape[0],
                   seq_len=seq_len,
+                  beta_h=beta_h,
                   sigx=sigx)
 
 S_buffer = np.zeros([max_episodes, max_steps+1, env.observation_space.shape[0]], dtype=np.float32)
@@ -136,7 +138,7 @@ global_step = 0
 
 while global_step < max_all_steps:
 
-    sp_seq = np.zeros([seq_len, env.observation_space.shape[0] + 1])
+    sp_seq = np.zeros([seq_len, env.observation_space.shape[0] + 1])  # SLAC uses a sequence of observations for the input of the actor
     s = env.reset()
     S_buffer[episode, 0] = s.reshape([-1])
     sp_seq[-1, :-1] = s
@@ -170,7 +172,7 @@ while global_step < max_all_steps:
         s = deepcopy(sp)
 
         if global_step > step_start_st and np.random.rand() < train_freq_st:
-
+            # training the latent variable model
             for _ in range(max(1, int(train_freq_st))):
                 weights = np.sum(V_buffer[:episode], axis=-1) + 2 * seq_len - 2
                 sample_es = np.random.choice(episode, batch_size, p=weights/weights.sum())
@@ -184,10 +186,11 @@ while global_step < max_all_steps:
                 agent.train_st(x_obs=np.concatenate((SP, R), axis=-1), a_obs=A, r_obs=R, validity=V)
 
         if global_step > step_start_rl and np.random.rand() < train_freq_rl:
-
+            # training the RL controller
             for _ in range(max(1, int(train_freq_rl))):
                 weights = np.sum(V_buffer[:episode], axis=-1) + 2 * seq_len - 2
                 sample_es = np.random.choice(episode, batch_size, p=weights/weights.sum())
+                #  sampling with such weights so that every step can be sampled with the same probability
 
                 SP = S_buffer[sample_es, 1:].reshape([batch_size, -1, env.observation_space.shape[0]])
                 S0 = S_buffer[sample_es, 0].reshape([batch_size, env.observation_space.shape[0]])
@@ -196,7 +199,7 @@ while global_step < max_all_steps:
                 D = D_buffer[sample_es].reshape([batch_size, -1, 1])
                 V = V_buffer[sample_es].reshape([batch_size, -1, 1])
 
-                agent.train_rl_sac(x_obs=np.concatenate((SP, R), axis=-1), s_0=S0, beta_h=beta_h,
+                agent.train_rl_sac(x_obs=np.concatenate((SP, R), axis=-1), s_0=S0,
                                    a_obs=A, r_obs=R, d_obs=D, validity=V, gamma=0.99)
 
         if global_step % step_perf_eval == 0:
@@ -222,6 +225,7 @@ global_steps = np.reshape(global_steps, [-1]).astype(np.float64)
 
 data = {"seq_len": seq_len,
         "sigx": sigx,
+        "beta_h": beta_h,
         "gamma": gamma,
         "codes": code_strs,
         "max_steps": max_steps,

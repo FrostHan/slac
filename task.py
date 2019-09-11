@@ -436,7 +436,7 @@ class TaskT(gym.Env):
                     self.first_experience = 1
                     if self.sections == 1:
                         self.done = 1
-                    r = 0.8 / (1 + np.sqrt(dis2)) if (self.sections == 1 or (not self.final_reward)) else 0.0
+                    r = 20.0 / (1 + np.sqrt(dis2)) if (self.sections == 1 or (not self.final_reward)) else 0.0
                 else:
                     r = 0.0
             elif self.sections >= 2 and (not self.second_experience):
@@ -446,7 +446,7 @@ class TaskT(gym.Env):
                     self.second_experience = 1
                     if self.sections == 2:
                         self.done = 1
-                    r = 2.0 / (1 + np.sqrt(dis2)) if (self.sections == 2 or (not self.final_reward)) else 0.0
+                    r = 50.0 / (1 + np.sqrt(dis2)) if (self.sections == 2 or (not self.final_reward)) else 0.0
                 else:
                     r = 0.0
             elif self.sections >= 3:
@@ -456,7 +456,7 @@ class TaskT(gym.Env):
                     self.third_experience = 1
                     if self.sections == 3:
                         self.done = 1
-                    r = 5.0 / (1 + np.sqrt(dis2)) if self.sections == 3 else 0.0
+                    r = 100.0 / (1 + np.sqrt(dis2)) if self.sections == 3 else 0.0
                 else:
                     r = 0.0
             else:

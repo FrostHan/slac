@@ -21,6 +21,7 @@ class SLAC(nn.Module):
                  lr_rl=3e-4,
                  optimizer='adam',
                  seq_len=8,
+                 beta_h='auto_1.0',
                  sigx='auto',
                  device='cpu'):
         """
@@ -47,7 +48,7 @@ class SLAC(nn.Module):
         self.sigx_value = sigx
         self.seq_len = seq_len
         self.device = torch.device(device)
-        self.beta_h = 'auto_1.0'
+        self.beta_h = beta_h
         self.hidden_size = 256  # used in the original paper
         self.target_entropy = - np.float32(action_size)
 
@@ -59,8 +60,8 @@ class SLAC(nn.Module):
                 assert init_value > 0., "The initial value of beta_h must be greater than 0"
 
             self.log_beta_h = torch.tensor(np.log(init_value).astype(np.float32), requires_grad=True)
-            self.beta_h = torch.exp(self.log_beta_h)
-
+        else:
+            self.beta_h = np.float32(beta_h)
         # policy network
         self.f_s2mua = nn.Sequential(nn.Linear(input_size * seq_len, self.hidden_size, bias=True),
                                      nn.ReLU(),
@@ -214,7 +215,8 @@ class SLAC(nn.Module):
         self.optimizer_a = torch.optim.Adam([*self.f_s2mua.parameters(), *self.f_s2log_siga.parameters()], lr=lr_rl)
         self.optimizer_v = torch.optim.Adam(
             [*self.f_da2q1.parameters(), *self.f_da2q2.parameters(), *self.f_d2v.parameters()], lr=lr_rl)
-        self.optimizer_e = torch.optim.Adam([self.log_beta_h], lr=lr_rl)  # optimizer for beta_h
+        if isinstance(self.log_beta_h, torch.Tensor):
+            self.optimizer_e = torch.optim.Adam([self.log_beta_h], lr=lr_rl)  # optimizer for beta_h
 
         self.mse_loss = nn.MSELoss()
         self.to(device=self.device)
@@ -443,10 +445,10 @@ class SLAC(nn.Module):
         if isinstance(d_obs, np.ndarray):
             d_obs = torch.from_numpy(d_obs)
 
-        if isinstance(beta_h, str):
+        if isinstance(self.beta_h, str):
             beta_h = torch.exp(self.log_beta_h)
         else:
-            pass
+            beta_h = self.beta_h
 
         ### shorten x, r .. by using v
         if not validity is None:
@@ -644,9 +646,9 @@ class SLAC(nn.Module):
             eps = (sampled_u.data - mua_tensor.data) / (siga_tensor.data)  # action noise quantity
             a = sampled_a.data  # action quantity
 
-            grad_mua = (beta_h * (2 * a) - PQPU).data * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * mua_tensor
+            grad_mua = (beta_h * (2 * a) - PQPU).data * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * mua_tensor * V_sampled.repeat_interleave(a.size()[-1], dim=-1)
             grad_siga = (- beta_h / (siga_tensor.data + EPS) + 2 * beta_h * a * eps - PQPU * eps).data \
-                        * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * siga_tensor
+                        * V_sampled.repeat_interleave(a.size()[-1], dim=-1) + REG * siga_tensor * V_sampled.repeat_interleave(a.size()[-1], dim=-1)
 
             self.optimizer_v.zero_grad()
             loss_critic.backward()
@@ -703,7 +705,8 @@ class SLAC(nn.Module):
             loss_a = torch.mean(beta_h * log_pi_exp * V_sampled
                                 - torch.min(self.f_da2q1(torch.cat((S_sampled, sampled_a), dim=-1)),
                                             self.f_da2q2(torch.cat((S_sampled, sampled_a), dim=-1))) * V_sampled) \
-                     + REG * 0.5 * (torch.mean(siga_tensor.pow(2)) + torch.mean(mua_tensor.pow(2)))
+                     + REG / 2 * (torch.mean((siga_tensor * V_sampled.repeat_interleave(siga_tensor.size()[-1], dim=-1)).pow(2))
+                                  + torch.mean((mua_tensor * V_sampled.repeat_interleave(mua_tensor.size()[-1], dim=-1)).pow(2)))
 
             self.optimizer_v.zero_grad()
             loss_critic.backward()
@@ -720,7 +723,7 @@ class SLAC(nn.Module):
         # --------------------------------------------------------------------------
 
         # update entropy coefficient if required
-        if isinstance(beta_h, torch.Tensor):
+        if isinstance(self.beta_h, str):
             self.optimizer_e.zero_grad()
 
             loss_e = - torch.mean(self.log_beta_h * (log_pi_exp + self.target_entropy).data)
