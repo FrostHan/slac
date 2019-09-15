@@ -11,6 +11,7 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 REG = 1e-3  # regularization of the actor
 
+
 class SLAC(nn.Module):
     def __init__(self,
                  input_size,
@@ -19,22 +20,19 @@ class SLAC(nn.Module):
                  z_layer=32,
                  lr_st=1e-4,
                  lr_rl=3e-4,
-                 optimizer='adam',
                  seq_len=8,
                  beta_h='auto_1.0',
-                 sigx='auto',
-                 device='cpu'):
+                 sigx='auto'):
         """
         Variational Multi-Layer RNN model with Action Feedback, using soft actor-critic for reinforcement learning.
         :param input_size: int, size of input vector.
         :param action_size: int, size of action vector.
         :param d_layer: int, indicating how many hidden neurons (d) in each layer. (z^2 in the original SLAC paper)
         :param z_layer: int, indicating how many hidden variable neurons (z) in each layer. (z^1 in the original SLAC paper)
-        :param lr_st: learning rate of state transition model (for ELBO)
         :param lr_er: learning rate or error regression (using SGD)
-        :param optimizer: optimizer for state transition model
+        :param beta_h: entropy coefficient (see https://spinningup.openai.com/en/latest/algorithms/sac.html)
         :param seq_len: sequence length
-        :param device: device for pytorch computation
+        :param sigx: standard deviation of observation prediction, can be a float or 'auto" (parameterized).
         """
 
         super(SLAC, self).__init__()
@@ -47,7 +45,7 @@ class SLAC(nn.Module):
         self.batch = True
         self.sigx_value = sigx
         self.seq_len = seq_len
-        self.device = torch.device(device)
+        self.device = torch.device('cpu')
         self.beta_h = beta_h
         self.hidden_size = 256  # used in the original paper
         self.target_entropy = - np.float32(action_size)
