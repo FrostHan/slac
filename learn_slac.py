@@ -1,6 +1,7 @@
 import numpy as np
 import gym
 import torch
+import torch.nn as nn
 from task import PendulumP, PendulumV, TaskT, ContinuousCartPoleEnv, CartPoleP, CartPoleV
 import time, os, argparse, warnings
 import scipy.io as sio
@@ -82,6 +83,8 @@ seq_len = 8
 gamma = 0.99
 sigx = 'auto'  # sigma of output prediction, sigx = 0.33333 in the original implementation (for pixel observations)
 
+model_act_fn = nn.Tanh  # (nn.ReLU in the original implement, but may cause NaN error)
+
 step_start_rl = 1000  # step to start reinforcement learning (SAC)
 step_start_st = 1000  # step to start learning the state transition model
 
@@ -113,13 +116,15 @@ agent = SLAC(input_size=env.observation_space.shape[0] + 1,
              action_size=env.action_space.shape[0],
              seq_len=seq_len,
              beta_h=beta_h,
-             sigx=sigx)
+             sigx=sigx,
+             model_act_fn=model_act_fn)
 
 agent_test = SLAC(input_size=env.observation_space.shape[0] + 1,
                   action_size=env.action_space.shape[0],
                   seq_len=seq_len,
                   beta_h=beta_h,
-                  sigx=sigx)
+                  sigx=sigx,
+                  model_act_fn=model_act_fn)
 
 S_buffer = np.zeros([max_episodes, max_steps+1, env.observation_space.shape[0]], dtype=np.float32)
 A_buffer = np.zeros([max_episodes, max_steps, env.action_space.shape[0]], dtype=np.float32)

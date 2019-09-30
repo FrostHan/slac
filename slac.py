@@ -11,6 +11,8 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 REG = 1e-3  # regularization of the actor
 
+SIG_MIN = 1e-3  # min value for all the sigmas in the latent variable network, to prevent NaN
+
 
 class SLAC(nn.Module):
     def __init__(self,
@@ -22,6 +24,7 @@ class SLAC(nn.Module):
                  lr_rl=3e-4,
                  seq_len=8,
                  beta_h='auto_1.0',
+                 model_act_fn=nn.Tanh,
                  sigx='auto'):
         """
         Variational Multi-Layer RNN model with Action Feedback, using soft actor-critic for reinforcement learning.
@@ -32,6 +35,7 @@ class SLAC(nn.Module):
         :param lr_er: learning rate or error regression (using SGD)
         :param beta_h: entropy coefficient (see https://spinningup.openai.com/en/latest/algorithms/sac.html)
         :param seq_len: sequence length
+        :param model_act_fn: activation function for the latent variable model (nn.ReLU in the original implement, but may cause NaN error)
         :param sigx: standard deviation of observation prediction, can be a float or 'auto" (parameterized).
         """
 
@@ -110,56 +114,56 @@ class SLAC(nn.Module):
         # p = prior (generative model), q = posterier (inference model)
         # generative models
         self.f_da2muz_p = nn.Sequential(nn.Linear(self.d_layer + self.action_size, self.hidden_size, bias=True),
-                                        nn.ReLU(),
+                                        model_act_fn(),
                                         nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                        nn.ReLU(),
+                                        model_act_fn(),
                                         nn.Linear(self.hidden_size, self.z_layer, bias=True))
 
         self.f_da2sigz_p = nn.Sequential(nn.Linear(self.d_layer + self.action_size, self.hidden_size, bias=True),
-                                         nn.ReLU(),
+                                         model_act_fn(),
                                          nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                         nn.ReLU(),
+                                         model_act_fn(),
                                          nn.Linear(self.hidden_size, self.z_layer, bias=True),
                                          nn.Softplus())
 
         self.f_zda2mud = nn.Sequential(
             nn.Linear(self.d_layer + self.action_size + self.z_layer, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.d_layer, bias=True))
 
         self.f_zda2sigd = nn.Sequential(
             nn.Linear(self.d_layer + self.action_size + self.z_layer, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.d_layer, bias=True),
             nn.Softplus())
 
         self.f_z2mud_begin = nn.Sequential(nn.Linear(self.z_layer, self.hidden_size, bias=True),
-                                           nn.ReLU(),
+                                           model_act_fn(),
                                            nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                           nn.ReLU(),
+                                           model_act_fn(),
                                            nn.Linear(self.hidden_size, self.d_layer, bias=True))
 
         self.f_z2sigd_begin = nn.Sequential(nn.Linear(self.z_layer, self.hidden_size, bias=True),
-                                            nn.ReLU(),
+                                            model_act_fn(),
                                             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                            nn.ReLU(),
+                                            model_act_fn(),
                                             nn.Linear(self.hidden_size, self.d_layer, bias=True),
                                             nn.Softplus())
 
         self.f_zd2mux = nn.Sequential(nn.Linear(self.d_layer + self.z_layer, self.hidden_size, bias=True),
-                                      nn.ReLU(),
+                                      model_act_fn(),
                                       nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                      nn.ReLU(),
+                                      model_act_fn(),
                                       nn.Linear(self.hidden_size, self.input_size, bias=True))
         if sigx is 'auto':
             self.f_zd2sigx = nn.Sequential(nn.Linear(self.d_layer + self.z_layer, self.hidden_size, bias=True),
-                                           nn.ReLU(),
+                                           model_act_fn(),
                                            nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                           nn.ReLU(),
+                                           model_act_fn(),
                                            nn.Linear(self.hidden_size, self.input_size, bias=True),
                                            nn.Softplus())
         else:
@@ -167,45 +171,45 @@ class SLAC(nn.Module):
 
         self.f_zda2mur = nn.Sequential(
             nn.Linear(2 * self.d_layer + 2 * self.z_layer + self.action_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, 1, bias=True))
 
         self.f_zda2sigr = nn.Sequential(
             nn.Linear(2 * self.d_layer + 2 * self.z_layer + self.action_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, 1, bias=True),
             nn.Softplus())
 
         # inference models
         self.f_dxa2muz_q = nn.Sequential(
             nn.Linear(self.d_layer + self.input_size + self.action_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.z_layer, bias=True))
 
         self.f_dxa2sigz_q = nn.Sequential(
             nn.Linear(self.d_layer + self.input_size + self.action_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-            nn.ReLU(),
+            model_act_fn(),
             nn.Linear(self.hidden_size, self.z_layer, bias=True),
             nn.Softplus())
 
         self.f_x2muz_q_begin = nn.Sequential(nn.Linear(self.input_size, self.hidden_size, bias=True),
-                                             nn.ReLU(),
+                                             model_act_fn(),
                                              nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                             nn.ReLU(),
+                                             model_act_fn(),
                                              nn.Linear(self.hidden_size, self.z_layer, bias=True))
 
         self.f_x2sigz_q_begin = nn.Sequential(nn.Linear(self.input_size, self.hidden_size, bias=True),
-                                              nn.ReLU(),
+                                              model_act_fn(),
                                               nn.Linear(self.hidden_size, self.hidden_size, bias=True),
-                                              nn.ReLU(),
+                                              model_act_fn(),
                                               nn.Linear(self.hidden_size, self.z_layer, bias=True),
                                               nn.Softplus())
 
@@ -230,10 +234,7 @@ class SLAC(nn.Module):
         :param x_obs: observations, pytorch tensor, size = batch_size by (num_steps+1) by dim_obs.
         :param r_obs: rewards, pytorch tensor, size = batch_size by num_steps by 1.
         :param a_obs: executed actions, pytorch tensor, size = batch_size by num_steps by dim_action.
-        :param h_0: initial hidden states of the RNN, list of  pytorch tensors, each level size = batch_size by dim_h.
-        :param d_0: initial outputs of the RNN,  list pytorch tensors, each level size = batch_size by dim_h.
         :param validity: validity matrix for padding, pytorch tensor (elements are 1 or 0), size = batch_size by num_steps. if validity=None, there is no need for padding.
-        :param seq_len: length of sequences used for BPTT
         :return: loss value
         """
         seq_len = self.seq_len
@@ -331,7 +332,7 @@ class SLAC(nn.Module):
 
                 mux_pred = self.f_zd2mux(torch.cat([z_p, d], dim=-1))
                 if self.sigx_value == 'auto':
-                    sigx_pred = self.f_zd2sigx(torch.cat([z_p, d], dim=-1))
+                    sigx_pred = self.f_zd2sigx(torch.cat([z_p, d], dim=-1)) + SIG_MIN
 
                     # no r_pred at the first step
             else:
@@ -352,10 +353,10 @@ class SLAC(nn.Module):
 
                 mux_pred = self.f_zd2mux(torch.cat([z_p, d], dim=-1))
                 if self.sigx_value == 'auto':
-                    sigx_pred = self.f_zd2sigx(torch.cat([z_p, d], dim=-1))
+                    sigx_pred = self.f_zd2sigx(torch.cat([z_p, d], dim=-1)) + SIG_MIN
 
                 mur_prev_pred = self.f_zda2mur(torch.cat([z_p, prev_z_q, d, prev_d, prev_a_obs], dim=-1))
-                sigr_prev_pred = self.f_zda2sigr(torch.cat([z_p, prev_z_q, d, prev_d, prev_a_obs], dim=-1))
+                sigr_prev_pred = self.f_zda2sigr(torch.cat([z_p, prev_z_q, d, prev_d, prev_a_obs], dim=-1)) + SIG_MIN
 
                 mur_prev_pred_series.append(mur_prev_pred)
                 sigr_prev_pred_series.append(sigr_prev_pred)
@@ -415,12 +416,9 @@ class SLAC(nn.Module):
 
         self.optimizer_st.step()
 
-        if np.random.rand() < 0.005:
-            print(loss.cpu().item())
-
         return loss.cpu().item()
 
-    def train_rl_sac(self, x_obs, s_0, r_obs, a_obs, gamma, d_obs=None, validity=None,
+    def train_rl_sac(self, x_obs, s_0, r_obs, a_obs, gamma, d_obs=None, validity=None, equal_pad=True,
                      reward_scale=1, beta_h='auto', computation='explicit', grad_clip=False):
 
         seq_len = self.seq_len
@@ -465,6 +463,11 @@ class SLAC(nn.Module):
         xs_obs = torch.zeros(
             [x_obs.size()[0], max_stp, x_obs.size()[-1] * seq_len])  # input for the policy function (include reward)
         xs_obs[:, -1, -(x_obs.size()[-1]):-1] = s_0
+
+        if equal_pad:
+            for tau in range(seq_len - 1):
+                xs_obs[:, -1, (x_obs.size()[-1])*tau:(x_obs.size()[-1])*(tau+1)] = xs_obs[:, -1, -(x_obs.size()[-1]):]
+
         for tau in range(max_stp):
             xs_obs[:, tau, :-(x_obs.size()[-1])] = xs_obs[:, tau - 1, (x_obs.size()[-1]):]
             xs_obs[:, tau, -(x_obs.size()[-1]):] = x_obs[:, tau, :]
@@ -502,9 +505,6 @@ class SLAC(nn.Module):
                 else:
                     tmp[b] = TMP[b, start_index: (start_index + seq_len + 1)]
 
-        # import time
-        # t_start = time.time()
-
         for stp in range(seq_len + 1):
             curr_x_obs = x_sampled[:, stp]
             prev_a_obs = a_sampled[:, stp]
@@ -536,8 +536,6 @@ class SLAC(nn.Module):
 
             d_series.append(d)
 
-        # print("rnn forward", time.time() - t_start)
-
         d_tensor = torch.stack(d_series, dim=1).detach().data
 
         XS_sampled = XS_sampled[:, :-1, :]
@@ -562,14 +560,10 @@ class SLAC(nn.Module):
         R_sampled = torch.zeros([R.size()[0], seq_len, R.size()[-1]], dtype=torch.float32)
         V_sampled = torch.zeros([V.size()[0], seq_len, V.size()[-1]], dtype=torch.float32)
 
-        # print(V.size())
-        # print(A.size())
         for b in range(A.size()[0]):
             v = V.cpu().numpy().reshape([A.size()[0], A.size()[1]])
             stps = np.sum(v[b], axis=0).astype(int)
             start_index = start_indices[b]
-
-            # sampled_indices = np.arange(start_index, start_index + seq_len)
 
             for tmp, TMP in zip((A_sampled, D_sampled, R_sampled, V_sampled),
                                 (A, D, R, V)):
@@ -585,16 +579,6 @@ class SLAC(nn.Module):
 
                 else:
                     tmp[b] = TMP[b, start_index: (start_index + seq_len)]
-
-        # S_sampled = S_sampled.transpose(0, 1).data  # new shape: num_steps x batch_size x n_neurons
-        # XS_sampled = XS_sampled.transpose(0, 1).data
-        # SP_sampled = SP_sampled.transpose(0, 1).data
-        # A_sampled = A_sampled.transpose(0, 1).data
-        # R_sampled = R_sampled.transpose(0, 1).data
-        # V_sampled = V_sampled.transpose(0, 1).data
-        # D_sampled = D_sampled.transpose(0, 1).data
-
-        # print(S_sampled.size())
 
         mua_tensor = self.f_s2mua(XS_sampled)
         siga_tensor = torch.exp(self.f_s2log_siga(XS_sampled).clamp(LOG_STD_MIN, LOG_STD_MAX))
@@ -734,7 +718,6 @@ class SLAC(nn.Module):
         for key in list(self.f_d2v.state_dict().keys()):
             state_dict_tar[key] = 0.995 * state_dict_tar[key] + 0.005 * state_dict[key]
             # state_dict_tar[key] = 0 * state_dict_tar[key] + 1 * state_dict[key]
-        # self.f_d2v_tar.load_state_dict(state_dict)
         self.f_d2v_tar.load_state_dict(state_dict_tar)
 
         if computation == 'implicit':
@@ -750,17 +733,6 @@ class SLAC(nn.Module):
 
         mua = self.f_s2mua(SS)
         siga = torch.exp(self.f_s2log_siga(SS).clamp(LOG_STD_MIN, LOG_STD_MAX))
-
-        # if np.random.rand() < 0.005:
-        #     print("mua = ", end="")
-        #     print(mua)
-        #     print("siga = ", end="")
-        #     print(siga)
-        #     print("beta_h = ", end="")
-        #     try:
-        #         print(self.log_beta_h.exp().item())
-        #     except:
-        #         pass
 
         a = np.tanh(self.sample_z(mua, siga).cpu().detach()).numpy()
 
