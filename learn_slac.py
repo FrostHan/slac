@@ -95,12 +95,20 @@ train_freq_st = 1. / train_step_rl
 
 # ============== Task-specific parameters =============
 
-import roboschool
-env = gym.make("RoboschoolHopper-v1")
-env_test = gym.make("RoboschoolHopper-v1")
-task_name = "rshopper"
+# import roboschool
+# env = gym.make("RoboschoolHopper-v1")
+# env_test = gym.make("RoboschoolHopper-v1")
+# task_name = "rshopper"
+#
+# action_filter = lambda a: a.reshape([-1])
+
+
+env = CartPoleV()
+env_test = CartPoleV()
+task_name = "velocity_only_cartpole"
 
 action_filter = lambda a: a.reshape([-1])
+
 
 max_steps = 1000
 est_min_steps = 5
@@ -159,6 +167,7 @@ while global_step < max_all_steps:
         if np.any(np.isnan(a)):
             raise ValueError
 
+        # env.render()
         sp, r, done, _ = env.step(action_filter(a))
 
         sp_seq[:-1] = deepcopy(sp_seq[1:])

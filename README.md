@@ -1,5 +1,5 @@
 # SLAC
-Implementation of stochastic latent actor critic (SLAC, https://alexlee-gk.github.io/slac/) in pytorch
+Implementation of stochastic latent actor critic (SLAC, https://alexlee-gk.github.io/slac/) in pytorch. Note that CNNs are not implemented, but instead MLP layers.
 
 
 ## Requirements

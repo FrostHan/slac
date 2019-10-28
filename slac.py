@@ -11,7 +11,8 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 REG = 1e-3  # regularization of the actor
 
-SIG_MIN = 1e-3  # min value for all the sigmas in the latent variable network, to prevent NaN
+
+SIG_MIN = 1e-2  #
 
 
 class SLAC(nn.Module):
@@ -24,7 +25,7 @@ class SLAC(nn.Module):
                  lr_rl=3e-4,
                  seq_len=8,
                  beta_h='auto_1.0',
-                 model_act_fn=nn.Tanh,
+                 model_act_fn=nn.ReLU,
                  sigx='auto'):
         """
         Variational Multi-Layer RNN model with Action Feedback, using soft actor-critic for reinforcement learning.
@@ -35,7 +36,6 @@ class SLAC(nn.Module):
         :param lr_er: learning rate or error regression (using SGD)
         :param beta_h: entropy coefficient (see https://spinningup.openai.com/en/latest/algorithms/sac.html)
         :param seq_len: sequence length
-        :param model_act_fn: activation function for the latent variable model (nn.ReLU in the original implement, but may cause NaN error)
         :param sigx: standard deviation of observation prediction, can be a float or 'auto" (parameterized).
         """
 
@@ -234,7 +234,10 @@ class SLAC(nn.Module):
         :param x_obs: observations, pytorch tensor, size = batch_size by (num_steps+1) by dim_obs.
         :param r_obs: rewards, pytorch tensor, size = batch_size by num_steps by 1.
         :param a_obs: executed actions, pytorch tensor, size = batch_size by num_steps by dim_action.
+        :param h_0: initial hidden states of the RNN, list of  pytorch tensors, each level size = batch_size by dim_h.
+        :param d_0: initial outputs of the RNN,  list pytorch tensors, each level size = batch_size by dim_h.
         :param validity: validity matrix for padding, pytorch tensor (elements are 1 or 0), size = batch_size by num_steps. if validity=None, there is no need for padding.
+        :param seq_len: length of sequences used for BPTT
         :return: loss value
         """
         seq_len = self.seq_len
@@ -505,6 +508,9 @@ class SLAC(nn.Module):
                 else:
                     tmp[b] = TMP[b, start_index: (start_index + seq_len + 1)]
 
+        # import time
+        # t_start = time.time()
+
         for stp in range(seq_len + 1):
             curr_x_obs = x_sampled[:, stp]
             prev_a_obs = a_sampled[:, stp]
@@ -564,6 +570,8 @@ class SLAC(nn.Module):
             v = V.cpu().numpy().reshape([A.size()[0], A.size()[1]])
             stps = np.sum(v[b], axis=0).astype(int)
             start_index = start_indices[b]
+
+            # sampled_indices = np.arange(start_index, start_index + seq_len)
 
             for tmp, TMP in zip((A_sampled, D_sampled, R_sampled, V_sampled),
                                 (A, D, R, V)):
@@ -718,6 +726,7 @@ class SLAC(nn.Module):
         for key in list(self.f_d2v.state_dict().keys()):
             state_dict_tar[key] = 0.995 * state_dict_tar[key] + 0.005 * state_dict[key]
             # state_dict_tar[key] = 0 * state_dict_tar[key] + 1 * state_dict[key]
+        # self.f_d2v_tar.load_state_dict(state_dict)
         self.f_d2v_tar.load_state_dict(state_dict_tar)
 
         if computation == 'implicit':
